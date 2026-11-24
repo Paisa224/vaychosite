@@ -1,122 +1,174 @@
 # Vaycho Web + API
 
-Proyecto web de captación de clientes con frontend en React (Vite + TypeScript) y backend en Express (TypeScript), preparado para despliegue con dominio propio y Cloudflare.
+Landing corporativa de captación de clientes. El frontend está hecho con React,
+Vite y TypeScript. En producción, un Cloudflare Worker sirve los assets estáticos
+y procesa `POST /api/leads`; el backend Express se conserva únicamente para
+desarrollo local.
 
-## Stack
-
-- Frontend: React + Vite + TypeScript + Tailwind
-- Backend: Express + TypeScript + Zod
-- Persistencia de leads: memoria o Prisma (según `LEAD_STORAGE_MODE`)
-- Notificaciones por email de leads: FormSubmit (configurable)
-
-## Estructura
+## Arquitectura de producción
 
 ```text
-vaycho/
-├─ frontend/
-├─ backend/
-├─ package.json
-└─ README.md
+Navegador
+  -> POST /api/leads en reformasmantenimiento.es
+  -> Cloudflare Worker
+  -> API HTTPS de Resend
+  -> buzón configurado
+
+GET /*
+  -> Cloudflare Static Assets (frontend/dist)
 ```
+
+El Worker no guarda los datos personales en una base de datos. La protección
+contra duplicados y abuso es efímera, por aislamiento, durante un minuto. El
+Worker no devuelve un éxito hasta que Resend acepta la petición HTTP; la
+aceptación de Resend no garantiza por sí sola la entrega final a la bandeja.
 
 ## Requisitos
 
 - Node.js 20 o superior
 - npm 10 o superior
+- Cuenta de Cloudflare con Workers
+- Cuenta de Resend con un dominio o subdominio verificado
 
 ## Instalación
-
-Desde la raíz:
 
 ```bash
 npm install
 ```
 
-## Variables de entorno
-
-### Backend
-
-Crear `backend/.env` (puedes copiar desde `backend/.env.example`):
-
-```env
-PORT=4000
-FRONTEND_ORIGIN=http://localhost:5173
-LEAD_STORAGE_MODE=memory
-LEAD_NOTIFICATION_PROVIDER=formsubmit
-LEAD_NOTIFICATION_EMAIL=manuel_navarro50@hotmail.com
-DATABASE_URL=postgresql://usuario:password@localhost:5432/vaycho_leads?schema=public
-```
-
-Notas:
-- Si `LEAD_STORAGE_MODE=memory`, `DATABASE_URL` no es obligatorio.
-- Si `LEAD_STORAGE_MODE=prisma`, `DATABASE_URL` sí es obligatorio.
-- `LEAD_NOTIFICATION_PROVIDER`:
-  - `formsubmit`: envía cada lead al correo configurado.
-  - `none`: desactiva notificaciones por correo.
-
-### Frontend
-
-Crear `frontend/.env` (puedes copiar desde `frontend/.env.example`):
-
-```env
-VITE_API_URL=http://localhost:4000
-```
-
-## Ejecutar en local
-
-Desde la raíz:
+## Desarrollo local
 
 ```bash
 npm run dev
 ```
 
-Esto levanta frontend y backend en paralelo.
+Esto inicia:
 
-- Frontend: `http://localhost:5173`
-- Backend: `http://localhost:4000`
+- Vite en `http://localhost:5173`
+- Express en `http://localhost:4000`
 
-## Build de producción
+El frontend usa siempre la ruta `/api/leads`. El proxy de Vite reenvía `/api`
+al backend Express durante el desarrollo, por lo que no es necesario colocar
+una URL absoluta ni definir una variable `VITE_API_URL`.
 
-Desde la raíz:
+El backend conserva sus validaciones, almacenamiento opcional y proveedor de
+notificaciones local. Consulta `backend/.env.example` para su configuración.
+
+## Pruebas y builds
 
 ```bash
+npm run typecheck:worker
+npm run test:worker
 npm run build
 ```
 
-## Endpoint principal
+Para validar el frontend y el Worker con Wrangler:
+
+```bash
+npm run build:frontend
+npx wrangler dev
+```
+
+En un `.dev.vars` local se pueden definir las tres variables indicadas abajo.
+`.dev.vars` está ignorado por Git. Nunca se deben usar secretos reales en
+archivos `VITE_*`, código fuente o `frontend/public/`.
+
+## Variables del Worker
+
+Configura en Cloudflare Workers & Pages > `vaychosite` > Settings > Variables:
+
+| Variable | Tipo recomendado | Descripción |
+| --- | --- | --- |
+| `RESEND_API_KEY` | Secret | Clave privada emitida por Resend. |
+| `LEAD_NOTIFICATION_TO` | Text / variable | Destinatario real de las solicitudes. |
+| `LEAD_NOTIFICATION_FROM` | Text / variable | Remitente autenticado del dominio verificado. |
+
+También se pueden configurar desde una terminal autenticada:
+
+```bash
+npx wrangler secret put RESEND_API_KEY
+npx wrangler deploy --var LEAD_NOTIFICATION_TO:DESTINATARIO
+npx wrangler deploy --var "LEAD_NOTIFICATION_FROM:NOMBRE <aviso@SUBDOMINIO_VERIFICADO>"
+```
+
+Los ejemplos anteriores contienen marcadores y no deben pegarse sin sustituir
+los valores. Preferiblemente, configura `LEAD_NOTIFICATION_TO` y
+`LEAD_NOTIFICATION_FROM` en el Dashboard para que persistan entre despliegues.
+
+## Configurar y verificar Resend
+
+1. Crea un dominio o subdominio de envío en Resend, preferiblemente un
+   subdominio exclusivo como `mail.reformasmantenimiento.es`.
+2. Resend mostrará los registros DNS exactos necesarios (SPF, DKIM y, cuando
+   corresponda, retorno de mensajes). Copia esos valores; no los inventes.
+3. Añade los registros al DNS de Cloudflare como **DNS only** si Resend así lo
+   indica. Desactiva el proxy naranja en registros que Resend necesite resolver
+   directamente.
+4. Espera a que Resend marque el dominio como verificado. Configura DMARC según
+   la política DNS del dominio si aún no existe.
+5. Crea una clave API limitada al envío de correo.
+6. Usa como `LEAD_NOTIFICATION_FROM` una dirección bajo el dominio verificado,
+   por ejemplo `Vaycho <avisos@mail.reformasmantenimiento.es>`, sustituyendo
+   el subdominio por el que hayas verificado realmente.
+7. Guarda la clave únicamente como secreto `RESEND_API_KEY`.
+8. Envía una prueba controlada y revisa tanto la respuesta HTTP como el panel
+   **Emails** de Resend y el buzón receptor.
+
+El correo del cliente se usa como `reply_to`, nunca como remitente autenticado.
+
+## Desplegar
+
+La configuración `wrangler.jsonc` combina Worker y Static Assets. Ya no debe
+usarse el despliegue anterior basado solo en `--assets`.
+
+```bash
+npm install
+npm run build:frontend
+npx wrangler deploy
+```
+
+O bien:
+
+```bash
+npm run deploy
+```
+
+En Cloudflare, verifica que `reformasmantenimiento.es` y
+`www.reformasmantenimiento.es` estén asociados al Worker `vaychosite` mediante
+Custom Domains. HTTPS, `assets`, navegación SPA y archivos públicos son servidos
+por el mismo despliegue.
+
+## Contrato del endpoint
 
 - `POST /api/leads`
+- `Content-Type: application/json`
+- Cuerpo máximo: 12 KB
+- Respuestas JSON con `ok` y `message`
+- `202`: Resend aceptó el envío
+- `400`, `413`, `415`, `422`: entrada inválida
+- `403`: origen cruzado
+- `409`: duplicado reciente
+- `429`: límite por aislamiento/IP
+- `502`: Resend no disponible o rechazó la solicitud
+- `503`: configuración de Resend incompleta
 
-El formulario del frontend envía aquí los datos del cliente. El backend valida, guarda el lead (según modo) y dispara la notificación por correo.
+El límite de abuso es de cinco solicitudes por minuto por IP observada en cada
+aislamiento de Worker, junto con deduplicación de contenido durante un minuto.
+Es apropiado para una landing sin base de datos; un producto con volumen alto
+puede añadir un Durable Object para límites distribuidos si fuera necesario.
 
-## Activación inicial de FormSubmit (importante)
+## Comprobación en producción
 
-La primera vez, FormSubmit envía un correo de verificación al destino configurado. Debes confirmar ese correo una sola vez para habilitar las notificaciones automáticas.
+1. Confirma que las tres variables del Worker existen y que el dominio está
+   verificado en Resend.
+2. Abre `https://reformasmantenimiento.es`.
+3. Completa el formulario con datos identificables como prueba.
+4. Comprueba que la interfaz muestra éxito y que DevTools registra
+   `POST /api/leads` con estado `202`.
+5. Comprueba el mensaje en Resend y, después, su recepción final en el buzón
+   configurado.
+6. Responde al correo y verifica que el destinatario sea el cliente de prueba
+   mediante `reply_to`.
 
-## Publicar en GitHub
-
-### 1) Inicializar repositorio
-
-```bash
-git init
-git add .
-git commit -m "chore: initial project setup"
-```
-
-### 2) Conectar remoto y subir
-
-```bash
-git branch -M main
-git remote add origin https://github.com/TU_USUARIO/TU_REPO.git
-git push -u origin main
-```
-
-## Dominio + Cloudflare (resumen)
-
-1. Comprar dominio (ejemplo: `reformasmantenimiento.es`)
-2. Añadirlo en Cloudflare
-3. Cambiar nameservers en el registrador por los de Cloudflare
-4. Crear DNS:
-   - `A` para `@` apuntando a la IP del servidor
-   - `CNAME` para `www` apuntando a `@`
-5. Configurar SSL/TLS en Cloudflare (`Full` o `Full (strict)` según certificado del servidor)
+No se considera probada la entrega real sin credenciales y una ejecución de
+integración contra Resend.
