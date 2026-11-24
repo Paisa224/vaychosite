@@ -138,6 +138,48 @@ En Cloudflare, verifica que `reformasmantenimiento.es` y
 Custom Domains. HTTPS, `assets`, navegación SPA y archivos públicos son servidos
 por el mismo despliegue.
 
+## SEO técnico inicial
+
+Se añaden estos recursos públicos:
+
+- `/robots.txt`
+- `/sitemap.xml`
+- metadatos SEO base en `frontend/index.html` (title, description, canonical,
+  robots, Open Graph y Twitter Card).
+
+Comprobación rápida tras desplegar:
+
+```bash
+curl -I https://reformasmantenimiento.es/robots.txt
+curl -I https://reformasmantenimiento.es/sitemap.xml
+curl https://reformasmantenimiento.es/robots.txt
+curl https://reformasmantenimiento.es/sitemap.xml
+```
+
+Resultado esperado:
+
+- `robots.txt`: `HTTP 200` y `Content-Type: text/plain`
+- `sitemap.xml`: `HTTP 200` y `Content-Type: application/xml` o `text/xml`
+- Ninguna de esas rutas debe devolver el HTML de la SPA.
+
+Para evitar bloqueos a Googlebot, revisa en Cloudflare:
+
+1. **Security > WAF > Custom rules**: que no existan reglas que bloqueen o
+   desafíen `User-Agent` de buscadores en `GET` de rutas públicas.
+2. **Security > Bots**: permitir tráfico de bots verificados y no aplicar
+   desafíos a Googlebot en el dominio principal.
+3. **Security > Events**: comprobar que Googlebot no registre bloqueos para
+   `/`, `/robots.txt` ni `/sitemap.xml`.
+
+### Solicitar indexación en Google Search Console
+
+1. Verificar la propiedad `https://reformasmantenimiento.es/`.
+2. En **Sitemaps**, enviar:
+   `https://reformasmantenimiento.es/sitemap.xml`.
+3. Usar **Inspección de URL** con `https://reformasmantenimiento.es/` y
+   solicitar indexación.
+4. Revisar cobertura e informes de rastreo en los días siguientes.
+
 ## Contrato del endpoint
 
 - `POST /api/leads`

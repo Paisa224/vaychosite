@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://reformasmantenimiento.es/sitemap.xml
